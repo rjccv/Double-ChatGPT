@@ -28,6 +28,8 @@ class ModelArguments:
     freeze_backbone: bool = field(default=False)
     tune_mm_mlp_adapter: bool = field(default=False)
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
+    # Modified to accept both img or vid
+    mm_use_img_start_end: bool = field(default=False)
     mm_use_vid_start_end: bool = field(default=False)
 
 
@@ -36,16 +38,24 @@ class DataArguments:
     data_path: str = field(default=None,
                            metadata={"help": "Path to the training data."})
     lazy_preprocess: bool = False
-    is_multimodal: bool = False
+    is_multimodal: bool = True
     sep_video_conv_front: bool = False
     video_token_len: int = 0
     video_folder: Optional[str] = field(default=None)
+    # Modified to accept both img or vid
+    sep_image_conv_front: bool = False
+    image_token_len: int = 0
+    image_folder: Optional[str] = field(default=None)
     frame_aspect_ratio: str = 'square'
+    # Accepts two imgs or vids at once
+    multi_view: bool = False
+    media_type: str = "img"
 
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
+    two_views: Optional[bool] = False
     optim: str = field(default="adamw_torch")
     remove_unused_columns: bool = field(default=False)
     freeze_mm_mlp_adapter: bool = field(default=False)
@@ -155,23 +165,36 @@ def preprocess_multimodal(
         sources: Sequence[str],
         multimodal_cfg: dict,
         cur_token_len: int,
+        media_type: str,
+        multi_view: str,
 ) -> Dict:
     is_multimodal = multimodal_cfg['is_multimodal']
     video_token_len = cur_token_len
     if not is_multimodal:
         return sources
+    
+    default_media_token = DEFAULT_VIDEO_TOKEN if media_type == "video" else DEFAULT_IMAGE_TOKEN
+    default_media_patch_token = DEFAULT_VIDEO_PATCH_TOKEN if media_type == "video" else DEFAULT_IMAGE_PATCH_TOKEN
+    default_media_start_token = DEFAULT_VID_START_TOKEN if media_type == "video" else DEFAULT_IMG_START_TOKEN
+    default_media_end_token = DEFAULT_VID_END_TOKEN if media_type == "video" else DEFAULT_IMG_END_TOKEN
 
+    if media_type == "video":
+        sep_media_conv_front = multimodal_cfg['sep_video_conv_front']
+        use_media_start_end = multimodal_cfg['use_vid_start_end']
+    else:
+        sep_media_conv_front = multimodal_cfg['sep_image_conv_front']
+        use_media_start_end = multimodal_cfg['use_img_start_end']
     for source in sources:
-        if multimodal_cfg['sep_video_conv_front']:
-            assert DEFAULT_VIDEO_TOKEN in source[0]['value']
-            source[0]['value'] = source[0]['value'].replace(DEFAULT_VIDEO_TOKEN, '').strip()
-            source[0]['value'] = DEFAULT_VIDEO_TOKEN + conversation_lib.default_conversation.sep + \
+        if sep_media_conv_front:
+            assert default_media_token in source[0]['value']
+            source[0]['value'] = source[0]['value'].replace(default_media_token, '').strip()
+            source[0]['value'] = default_media_token + conversation_lib.default_conversation.sep + \
                                  conversation_lib.default_conversation.roles[0] + ": " + source[0]['value']
         for sentence in source:
-            replace_token = DEFAULT_VIDEO_PATCH_TOKEN * video_token_len
-            if multimodal_cfg['use_vid_start_end']:
-                replace_token = DEFAULT_VID_START_TOKEN + replace_token + DEFAULT_VID_END_TOKEN
-            sentence["value"] = sentence["value"].replace(DEFAULT_VIDEO_TOKEN, replace_token)
+            replace_token = default_media_patch_token * video_token_len
+            if use_media_start_end:
+                replace_token = default_media_start_token + replace_token + default_media_end_token
+            sentence["value"] = sentence["value"].replace(default_media_token, replace_token)
 
     return sources
 
@@ -376,13 +399,15 @@ class SupervisedDataset(Dataset):
         return dict(input_ids=self.input_ids[i], labels=self.labels[i])
 
 
-class LazySupervisedDataset(Dataset):
+class LazySupervisedDataset4VID(Dataset):
     """Dataset for supervised fine-tuning."""
 
     def __init__(self, data_path: str,
                  tokenizer: transformers.PreTrainedTokenizer,
-                 multimodal_cfg: dict):
-        super(LazySupervisedDataset, self).__init__()
+                 multimodal_cfg: dict,
+                 media_type: str,
+                 multi_view: str):
+        super(LazySupervisedDataset4VID, self).__init__()
         logging.warning("Loading data...")
         list_data_dict = json.load(open(data_path, "r"))
 
@@ -390,6 +415,8 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         self.multimodal_cfg = multimodal_cfg
+        self.media_type = media_type
+        self.multi_view= multi_view
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -408,7 +435,8 @@ class LazySupervisedDataset(Dataset):
             cur_token_len = 356  # 100 temporal + 256 spatial, TODO: Hard Coding is not good
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
-                self.multimodal_cfg, cur_token_len)
+                self.multimodal_cfg, cur_token_len, self.media_type,
+                self.multi_view)
 
         data_dict = preprocess(
             sources,
@@ -423,12 +451,94 @@ class LazySupervisedDataset(Dataset):
 
         return data_dict
 
+class LazySupervisedDataset4IMG(Dataset):
+    """Dataset for supervised fine-tuning."""
+
+    def __init__(self, data_path: str,
+                 tokenizer: transformers.PreTrainedTokenizer,
+                 multimodal_cfg: dict,
+                 media_type: str,
+                 multi_view: str):
+        super(LazySupervisedDataset4IMG, self).__init__()
+        logging.warning("Loading data...")
+        list_data_dict = json.load(open(data_path, "r"))
+
+        logging.warning("Formatting inputs...Skip in lazy mode")
+        self.tokenizer = tokenizer
+        self.list_data_dict = list_data_dict
+        self.multimodal_cfg = multimodal_cfg
+        self.media_type = media_type
+        self.multi_view = multi_view
+
+    def __len__(self):
+        return len(self.list_data_dict)
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        sources = self.list_data_dict[i]
+        if isinstance(i, int):
+            sources = [sources]
+        assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+        if self.multi_view:
+            if 'img1' in sources[0] and 'img2' in sources[0]:
+                video_folder = self.multimodal_cfg['image_folder']
+
+                video_file1 = self.list_data_dict[i]['img1']
+                with open(f"{video_folder}/{video_file1}", "rb") as f:
+                    features1 = pickle.load(f)
+
+                video_file2 = self.list_data_dict[i]['img2']
+                with open(f"{video_folder}/{video_file2}", "rb") as f:
+                    features2 = pickle.load(f)
+
+                cur_token_len = 256  # 100 temporal + 256 spatial, TODO: Hard Coding is not good
+                sources = preprocess_multimodal(
+                    copy.deepcopy([e["conversations"] for e in sources]),
+                    self.multimodal_cfg, cur_token_len, 
+                    self.media_type, self.multi_view)
+
+            data_dict = preprocess(
+                sources,
+                self.tokenizer)
+            if isinstance(i, int):
+                data_dict = dict(input_ids=data_dict["input_ids"][0],
+                                labels=data_dict["labels"][0])
+
+            # video exist in the data
+            if 'img1' in self.list_data_dict[i] and 'img2' in self.list_data_dict[i]:
+                data_dict["img1"] = features1
+                data_dict["img2"] = features2
+        else:
+            if 'img' in sources[0]:
+                video_file = self.list_data_dict[i]['img']
+                video_folder = self.multimodal_cfg['image_folder']
+                with open(f"{video_folder}/{video_file}", "rb") as f:
+                    features = pickle.load(f)
+
+                cur_token_len = 356  # 100 temporal + 256 spatial, TODO: Hard Coding is not good
+                sources = preprocess_multimodal(
+                    copy.deepcopy([e["conversations"] for e in sources]),
+                    self.multimodal_cfg, cur_token_len, 
+                    self.media_type, self.multi_view)
+
+            data_dict = preprocess(
+                sources,
+                self.tokenizer)
+            if isinstance(i, int):
+                data_dict = dict(input_ids=data_dict["input_ids"][0],
+                                labels=data_dict["labels"][0])
+
+            # video exist in the data
+            if 'img' in self.list_data_dict[i]:
+                data_dict["img"] = features
+
+        return data_dict
 
 @dataclass
 class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
 
     tokenizer: transformers.PreTrainedTokenizer
+    multi_view: bool
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels = tuple([instance[key] for instance in instances]
@@ -446,12 +556,39 @@ class DataCollatorForSupervisedDataset(object):
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
 
-        if 'video' in instances[0]:
-            features = [torch.tensor(instance['video']) for instance in instances]
-            if all(x is not None and x.shape == features[0].shape for x in features):
-                batch['video_spatio_temporal_features'] = torch.stack(features)
-            else:
-                batch['video_spatio_temporal_features'] = features
+        if self.multi_view:
+            if 'video1' in instances[0] and 'video2':
+                features1 = [torch.tensor(instance['video1']) for instance in instances]
+                features2 = [torch.tensor(instance['video2']) for instance in instances]
+                if all(x is not None and x.shape == features1[0].shape for x in features1) and all(x is not None and x.shape == features2[0].shape for x in features2):
+                    batch['video_spatio_temporal_features1'] = torch.stack(features1)
+                    batch['video_spatio_temporal_features2'] = torch.stack(features2)
+                else:
+                    batch['video_spatio_temporal_features1'] = features1
+                    batch['video_spatio_temporal_features2'] = features2
+            elif 'img1' in instances[0] and 'img2' in instances[0]:
+                features1 = [torch.tensor(instance['img1']) for instance in instances]
+                features2 = [torch.tensor(instance['img2']) for instance in instances]
+                if all(x is not None and x.shape == features1[0].shape for x in features1) and all(x is not None and x.shape == features2[0].shape for x in features2):
+                    batch['img_spatio_temporal_features1'] = torch.stack(features1)
+                    batch['img_spatio_temporal_features2'] = torch.stack(features2)
+                else:
+                    batch['img_spatio_temporal_features1'] = features1
+                    batch['img_spatio_temporal_features2'] = features2
+
+        else:
+            if 'video' in instances[0]:
+                features = [torch.tensor(instance['video']) for instance in instances]
+                if all(x is not None and x.shape == features[0].shape for x in features):
+                    batch['video_spatio_temporal_features'] = torch.stack(features)
+                else:
+                    batch['video_spatio_temporal_features'] = features
+            elif 'img' in instances[0]:
+                features = [torch.tensor(instance['img']) for instance in instances]
+                if all(x is not None and x.shape == features[0].shape for x in features):
+                    batch['img_spatio_temporal_features'] = torch.stack(features)
+                else:
+                    batch['img_spatio_temporal_features'] = features
 
         return batch
 
@@ -459,9 +596,10 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    dataset_cls = (LazySupervisedDataset
-                   if data_args.lazy_preprocess else SupervisedDataset)
-    train_dataset = dataset_cls(tokenizer=tokenizer,
+    if (data_args.media_type).lower() == "vid" or (data_args.media_type).lower() == "video":
+        dataset_cls = (LazySupervisedDataset4VID
+                    if data_args.lazy_preprocess else SupervisedDataset)
+        train_dataset = dataset_cls(tokenizer=tokenizer,
                                 data_path=data_args.data_path,
                                 multimodal_cfg=dict(
                                     is_multimodal=data_args.is_multimodal,
@@ -469,8 +607,24 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                     video_token_len=data_args.video_token_len,
                                     video_folder=data_args.video_folder,
                                     frame_aspect_ratio=data_args.frame_aspect_ratio,
-                                    use_vid_start_end=getattr(data_args, 'mm_use_vid_start_end', False)))
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+                                    use_vid_start_end=getattr(data_args, 'mm_use_vid_start_end', False)),
+                                    media_type=data_args.media_type,
+                                    multi_view=data_args.multi_view)
+    else:
+        dataset_cls = (LazySupervisedDataset4IMG
+                    if data_args.lazy_preprocess else SupervisedDataset)
+        train_dataset = dataset_cls(tokenizer=tokenizer,
+                                data_path=data_args.data_path,
+                                multimodal_cfg=dict(
+                                    is_multimodal=data_args.is_multimodal,
+                                    sep_image_conv_front=data_args.sep_image_conv_front,
+                                    image_token_len=data_args.image_token_len,
+                                    image_folder=data_args.image_folder,
+                                    frame_aspect_ratio=data_args.frame_aspect_ratio,
+                                    use_img_start_end=getattr(data_args, 'mm_use_img_start_end', False)),
+                                    media_type=data_args.media_type,
+                                    multi_view=data_args.multi_view)
+    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer, multi_view=data_args.multi_view)
     return dict(train_dataset=train_dataset,
                 eval_dataset=None,
                 data_collator=data_collator)
@@ -484,6 +638,7 @@ def train():
     model = VideoChatGPTLlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
+        torch_dtype=torch.bfloat16,
         # torch_dtype=torch.bfloat16 if training_args.bf16 else torch.float,
     )
     model.config.use_cache = False
@@ -493,10 +648,12 @@ def train():
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
+        # "byt5-small",
         cache_dir=training_args.cache_dir,
         model_max_length=training_args.model_max_length,
         padding_side="right",
         use_fast=False,
+        
     )
 
     conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1_1"]
@@ -524,8 +681,8 @@ def train():
     vision_config.use_vid_start_end = training_args.use_vid_start_end = model_args.mm_use_vid_start_end
     model.config.sep_video_conv_front = data_args.sep_video_conv_front
     model.initialize_vision_tokenizer(mm_use_vid_start_end=model_args.mm_use_vid_start_end, tokenizer=tokenizer,
-                                      device=training_args.device, tune_mm_mlp_adapter=model_args.tune_mm_mlp_adapter,
-                                      pretrain_mm_mlp_adapter=model_args.pretrain_mm_mlp_adapter)
+                                      device=training_args.device, media_type=data_args.media_type, 
+                                      tune_mm_mlp_adapter=model_args.tune_mm_mlp_adapter, pretrain_mm_mlp_adapter=model_args.pretrain_mm_mlp_adapter)
 
     params_no_grad = [n for n, p in model.named_parameters() if not p.requires_grad]
     if len(params_no_grad) > 0:
@@ -552,8 +709,11 @@ def train():
             FSDP.__init__ = patch_FSDP_use_orig_params(FSDP.__init__)
 
     data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
+    # for sample in data_module["train_dataset"]:
+    #     print(sample)
     training_args.report_to = []
     # training_args.max_steps = 10
+
     trainer = VideoChatGPTTrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):

@@ -6,6 +6,16 @@ LOGDIR = "."
 
 # Defining model
 DEFAULT_VIDEO_TOKEN = "<video>"
+DEFAULT_VIDEO_TOKEN_1 = "<video1>"
+DEFAULT_VIDEO_TOKEN_2 = "<video2>"
 DEFAULT_VIDEO_PATCH_TOKEN = "<vid_patch>"
 DEFAULT_VID_START_TOKEN = "<vid_start>"
 DEFAULT_VID_END_TOKEN = "<vid_end>"
+
+# Defining model GCC Token
+DEFAULT_IMAGE_TOKEN = "<img>"
+DEFAULT_IMAGE_TOKEN_1 = "<img1>"
+DEFAULT_IMAGE_TOKEN_2 = "<img2>"
+DEFAULT_IMAGE_PATCH_TOKEN = "<img_patch>"
+DEFAULT_IMG_START_TOKEN = "<img_start>"
+DEFAULT_IMG_END_TOKEN = "<img_end>"

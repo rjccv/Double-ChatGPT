@@ -6,9 +6,18 @@ from transformers import AutoConfig, AutoModelForCausalLM, LlamaConfig, LlamaMod
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 DEFAULT_VIDEO_TOKEN = "<video>"
+DEFAULT_VIDEO_TOKEN_1 = "<video1>"
+DEFAULT_VIDEO_TOKEN_2 = "<video2>"
 DEFAULT_VIDEO_PATCH_TOKEN = "<vid_patch>"
 DEFAULT_VID_START_TOKEN = "<vid_start>"
 DEFAULT_VID_END_TOKEN = "<vid_end>"
+
+DEFAULT_IMG_TOKEN = "<img>"
+DEFAULT_IMG_TOKEN1 = "<img1>"
+DEFAULT_IMG_TOKEN2 = "<img2>"
+DEFAULT_IMG_PATCH_TOKEN = "<img_patch>"
+DEFAULT_IMG_START_TOKEN = "<img_start>"
+DEFAULT_IMG_END_TOKEN = "<img_end>"
 
 
 class VisionConfig:
@@ -56,10 +65,210 @@ class VideoChatGPTLlamaModel(LlamaModel):
             video_token_len=num_patches,
             vision_config=vision_config
         )
+    
+    def forward_single_view(
+            self,
+            input_ids: torch.LongTensor = None,
+            media_type: str = "img",
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            orig_embeds_params:  torch.LongTensor = None,
+            video_spatio_temporal_features: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features: Optional[torch.FloatTensor] = None,
+         ):
+        
+        use_only_video = video_spatio_temporal_features is not None and img_spatio_temporal_features is None
+        use_only_img = img_spatio_temporal_features is not None and video_spatio_temporal_features is None
+        use_one_media_type = not (use_only_video and use_only_img)
+
+        assert use_one_media_type, "Use only either images or videos"
+        
+        if video_spatio_temporal_features is not None:
+            spatio_temporal_features = video_spatio_temporal_features
+        elif img_spatio_temporal_features is not None:
+            spatio_temporal_features = img_spatio_temporal_features
+        else:
+            raise ValueError("No input features found")
+
+        if (input_ids.shape[1] != 1 or self.training):
+
+            features = self.mm_projector(spatio_temporal_features)
+            dummy_features = torch.zeros(features.shape[1], 1024, device=inputs_embeds.device,
+                                            dtype=inputs_embeds.dtype)
+            dummy_features = self.mm_projector(dummy_features)
+
+            new_input_embeds = []
+            cur_idx = 0
+            for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
+                if (cur_input_ids == self.vision_config.vid_patch_token).sum() == 0:
+                    # Multimodal LLM, but the current sample is not multimodal
+                    cur_input_embeds = cur_input_embeds + (0. * dummy_features).sum()
+                    new_input_embeds.append(cur_input_embeds)
+                    cur_idx += 1
+                    continue
+                if self.vision_config.use_vid_start_end:
+                    if (cur_input_ids == self.vision_config.vid_start_token).sum() != (
+                            cur_input_ids == self.vision_config.vid_end_token).sum():
+                        raise ValueError("The number of video start tokens and video end tokens should be the same.")
+                    start_tokens = torch.where(cur_input_ids == self.vision_config.vid_start_token)[0]
+                    for video_start_token_pos in start_tokens:
+                        cur_video_features = features[cur_idx].to(device=cur_input_embeds.device)
+                        num_patches = cur_video_features.shape[0]
+                        if cur_input_ids[video_start_token_pos + num_patches + 1] != self.vision_config.vid_end_token:
+                            raise ValueError("The video end token should follow the video start token.")
+                        if orig_embeds_params is not None:
+                            cur_new_input_embeds = torch.cat((cur_input_embeds[:video_start_token_pos].detach(),
+                                                            cur_input_embeds[
+                                                            video_start_token_pos:video_start_token_pos + 1],
+                                                            cur_video_features, cur_input_embeds[
+                                                                                video_start_token_pos + num_patches
+                                                                                + 1:video_start_token_pos
+                                                                                + num_patches + 2],
+                                                            cur_input_embeds[
+                                                            video_start_token_pos + num_patches + 2:].detach()),
+                                                            dim=0)
+                        else:
+                            cur_new_input_embeds = torch.cat((cur_input_embeds[:video_start_token_pos + 1],
+                                                            cur_video_features,
+                                                            cur_input_embeds[video_start_token_pos
+                                                                            + num_patches + 1:]), dim=0)
+                        cur_idx += 1
+                    new_input_embeds.append(cur_new_input_embeds)
+                else:
+                    cur_video_features = features[cur_idx]
+                    num_patches = cur_video_features.shape[0]
+                    if (cur_input_ids == self.vision_config.vid_patch_token).sum() != num_patches:
+                        raise ValueError(
+                            "The number of video patch tokens should be the same as the number of video patches.")
+                    masked_indices = torch.where(cur_input_ids == self.vision_config.vid_patch_token)[0]
+                    mask_index_start = masked_indices[0]
+                    if (masked_indices != torch.arange(mask_index_start, mask_index_start + num_patches,
+                                                    device=masked_indices.device, dtype=masked_indices.dtype)).any():
+                        raise ValueError("The video patch tokens should be consecutive.")
+                    if orig_embeds_params is not None:
+                        cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start].detach(),
+                                                        cur_video_features,
+                                                        cur_input_embeds[mask_index_start + num_patches:].detach()),
+                                                        dim=0)
+                    else:
+                        cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], cur_video_features,
+                                                        cur_input_embeds[mask_index_start + num_patches:]), dim=0)
+                    new_input_embeds.append(cur_new_input_embeds)
+                    cur_idx += 1
+            inputs_embeds = torch.stack(new_input_embeds, dim=0)
+
+        return inputs_embeds
+    
+    def forward_two_views(
+            self,
+            input_ids: torch.LongTensor = None,
+            media_type: str = "img",
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+            orig_embeds_params: Optional[torch.FloatTensor] = None,
+            video_spatio_temporal_features1: Optional[torch.FloatTensor] = None,
+            video_spatio_temporal_features2: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features1: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features2: Optional[torch.FloatTensor] = None,
+    ):
+        
+        use_only_video = (video_spatio_temporal_features1, video_spatio_temporal_features2) is not (None, None) \
+                and (img_spatio_temporal_features1, img_spatio_temporal_features2) is (None, None)
+        use_only_img = (img_spatio_temporal_features1, img_spatio_temporal_features2) is not (None, None) \
+                and (video_spatio_temporal_features1, video_spatio_temporal_features2) is (None, None)
+        
+        use_one_media_type = not (use_only_video and use_only_img)
+
+        assert use_one_media_type, "Use only either images or videos"
+
+        
+        if (video_spatio_temporal_features1, video_spatio_temporal_features2) is not (None, None):
+            spatial_temporal_features1, spatial_temporal_features2 = video_spatio_temporal_features1, video_spatio_temporal_features2
+        elif (video_spatio_temporal_features1, video_spatio_temporal_features2) is not (None, None):
+            spatial_temporal_features1, spatial_temporal_features2 = img_spatio_temporal_features1, img_spatio_temporal_features2
+        else:
+            raise ValueError("No input features found")
+
+        # if (input_ids.shape[1] != 1 or self.training) and video_spatio_temporal_features is not None:
+        if (input_ids.shape[1] != 1 or self.training):
+
+            features1 = self.mm_projector(spatial_temporal_features1)
+            features2 = self.mm_projector(spatial_temporal_features2)
+            dummy_features1 = torch.zeros(features1.shape[1], 1024, device=inputs_embeds.device,
+                                            dtype=inputs_embeds.dtype)
+            dummy_features2 = torch.zeros(features2.shape[1], 1024, device=inputs_embeds.device,
+                                            dtype=inputs_embeds.dtype)
+            dummy_features1 = self.mm_projector(dummy_features1)
+            dummy_features2 = self.mm_projector(dummy_features2)
+
+            new_input_embeds = []
+            cur_idx = 0
+            for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
+                if (cur_input_ids == self.vision_config.vid_patch_token).sum() == 0:
+                    # Multimodal LLM, but the current sample is not multimodal
+                    cur_input_embeds = cur_input_embeds + (0. * dummy_features).sum()
+                    new_input_embeds.append(cur_input_embeds)
+                    cur_idx += 1
+                    continue
+                if self.vision_config.use_vid_start_end:
+                    if (cur_input_ids == self.vision_config.vid_start_token).sum() != (
+                            cur_input_ids == self.vision_config.vid_end_token).sum():
+                        raise ValueError("The number of video start tokens and video end tokens should be the same.")
+                    start_tokens = torch.where(cur_input_ids == self.vision_config.vid_start_token)[0]
+                    for video_start_token_pos in start_tokens:
+                        cur_video_features = features[cur_idx].to(device=cur_input_embeds.device)
+                        num_patches = cur_video_features.shape[0]
+                        if cur_input_ids[video_start_token_pos + num_patches + 1] != self.vision_config.vid_end_token:
+                            raise ValueError("The video end token should follow the video start token.")
+                        if orig_embeds_params is not None:
+                            cur_new_input_embeds = torch.cat((cur_input_embeds[:video_start_token_pos].detach(),
+                                                            cur_input_embeds[
+                                                            video_start_token_pos:video_start_token_pos + 1],
+                                                            curr_video_features1,
+                                                            cur_input_embeds[
+                                                            video_start_token_pos + 2:video_start_token_pos + 3],
+                                                            curr_video_features2, cur_input_embeds[
+                                                                                video_start_token_pos + num_patches
+                                                                                + 1:video_start_token_pos
+                                                                                + num_patches + 2],
+                                                            cur_input_embeds[
+                                                            video_start_token_pos + num_patches + 2:].detach()),
+                                                            dim=0)
+                        else:
+                            cur_new_input_embeds = torch.cat((cur_input_embeds[:video_start_token_pos + 1],
+                                                            cur_video_features,
+                                                            cur_input_embeds[video_start_token_pos
+                                                                            + num_patches + 1:]), dim=0)
+                        cur_idx += 1
+                    new_input_embeds.append(cur_new_input_embeds)
+                else:
+                    cur_video_features = features[cur_idx]
+                    num_patches = cur_video_features.shape[0]
+                    if (cur_input_ids == self.vision_config.vid_patch_token).sum() != num_patches:
+                        raise ValueError(
+                            "The number of video patch tokens should be the same as the number of video patches.")
+                    masked_indices = torch.where(cur_input_ids == self.vision_config.vid_patch_token)[0]
+                    mask_index_start = masked_indices[0]
+                    if (masked_indices != torch.arange(mask_index_start, mask_index_start + num_patches,
+                                                    device=masked_indices.device, dtype=masked_indices.dtype)).any():
+                        raise ValueError("The video patch tokens should be consecutive.")
+                    if orig_embeds_params is not None:
+                        cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start].detach(),
+                                                        cur_video_features,
+                                                        cur_input_embeds[mask_index_start + num_patches:].detach()),
+                                                        dim=0)
+                    else:
+                        cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], cur_video_features,
+                                                        cur_input_embeds[mask_index_start + num_patches:]), dim=0)
+                    new_input_embeds.append(cur_new_input_embeds)
+                    cur_idx += 1
+            inputs_embeds = torch.stack(new_input_embeds, dim=0)
+
+        return inputs_embeds
 
     def forward(
             self,
             input_ids: torch.LongTensor = None,
+            media_type: str = "img",
+            multi_view: Optional[bool] = None,
             attention_mask: Optional[torch.Tensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
@@ -67,6 +276,11 @@ class VideoChatGPTLlamaModel(LlamaModel):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             video_spatio_temporal_features: Optional[torch.FloatTensor] = None,
+            video_spatio_temporal_features1: Optional[torch.FloatTensor] = None,
+            video_spatio_temporal_features2: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features1: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features2: Optional[torch.FloatTensor] = None,
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         orig_embeds_params = getattr(self, 'orig_embeds_params', None)
@@ -77,73 +291,27 @@ class VideoChatGPTLlamaModel(LlamaModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-
-        if (input_ids.shape[1] != 1 or self.training) and video_spatio_temporal_features is not None:
-
-            video_features = self.mm_projector(video_spatio_temporal_features)
-            dummy_video_features = torch.zeros(video_features.shape[1], 1024, device=inputs_embeds.device,
-                                               dtype=inputs_embeds.dtype)
-            dummy_video_features = self.mm_projector(dummy_video_features)
-
-            new_input_embeds = []
-            cur_video_idx = 0
-            for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
-                if (cur_input_ids == self.vision_config.vid_patch_token).sum() == 0:
-                    # Multimodal LLM, but the current sample is not multimodal
-                    cur_input_embeds = cur_input_embeds + (0. * dummy_video_features).sum()
-                    new_input_embeds.append(cur_input_embeds)
-                    cur_video_idx += 1
-                    continue
-                if self.vision_config.use_vid_start_end:
-                    if (cur_input_ids == self.vision_config.vid_start_token).sum() != (
-                            cur_input_ids == self.vision_config.vid_end_token).sum():
-                        raise ValueError("The number of video start tokens and video end tokens should be the same.")
-                    video_start_tokens = torch.where(cur_input_ids == self.vision_config.vid_start_token)[0]
-                    for video_start_token_pos in video_start_tokens:
-                        cur_video_features = video_features[cur_video_idx].to(device=cur_input_embeds.device)
-                        num_patches = cur_video_features.shape[0]
-                        if cur_input_ids[video_start_token_pos + num_patches + 1] != self.vision_config.vid_end_token:
-                            raise ValueError("The video end token should follow the video start token.")
-                        if orig_embeds_params is not None:
-                            cur_new_input_embeds = torch.cat((cur_input_embeds[:video_start_token_pos].detach(),
-                                                              cur_input_embeds[
-                                                              video_start_token_pos:video_start_token_pos + 1],
-                                                              cur_video_features, cur_input_embeds[
-                                                                                  video_start_token_pos + num_patches
-                                                                                  + 1:video_start_token_pos
-                                                                                  + num_patches + 2],
-                                                              cur_input_embeds[
-                                                              video_start_token_pos + num_patches + 2:].detach()),
-                                                             dim=0)
-                        else:
-                            cur_new_input_embeds = torch.cat((cur_input_embeds[:video_start_token_pos + 1],
-                                                              cur_video_features,
-                                                              cur_input_embeds[video_start_token_pos
-                                                                               + num_patches + 1:]), dim=0)
-                        cur_video_idx += 1
-                    new_input_embeds.append(cur_new_input_embeds)
-                else:
-                    cur_video_features = video_features[cur_video_idx]
-                    num_patches = cur_video_features.shape[0]
-                    if (cur_input_ids == self.vision_config.vid_patch_token).sum() != num_patches:
-                        raise ValueError(
-                            "The number of video patch tokens should be the same as the number of video patches.")
-                    masked_indices = torch.where(cur_input_ids == self.vision_config.vid_patch_token)[0]
-                    mask_index_start = masked_indices[0]
-                    if (masked_indices != torch.arange(mask_index_start, mask_index_start + num_patches,
-                                                       device=masked_indices.device, dtype=masked_indices.dtype)).any():
-                        raise ValueError("The video patch tokens should be consecutive.")
-                    if orig_embeds_params is not None:
-                        cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start].detach(),
-                                                          cur_video_features,
-                                                          cur_input_embeds[mask_index_start + num_patches:].detach()),
-                                                         dim=0)
-                    else:
-                        cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], cur_video_features,
-                                                          cur_input_embeds[mask_index_start + num_patches:]), dim=0)
-                    new_input_embeds.append(cur_new_input_embeds)
-                    cur_video_idx += 1
-            inputs_embeds = torch.stack(new_input_embeds, dim=0)
+        
+        if multi_view:
+            inputs_embeds = self.forward_two_views(
+                    input_ids=input_ids,
+                    media_type=media_type,
+                    inputs_embeds=inputs_embeds,
+                    orig_embeds_params=orig_embeds_params,
+                    video_spatio_temporal_features1=video_spatio_temporal_features1,
+                    video_spatio_temporal_features2=video_spatio_temporal_features2,
+                    img_spatio_temporal_features1=img_spatio_temporal_features1,
+                    img_spatio_temporal_features2=img_spatio_temporal_features2,
+                )
+        else:
+            inputs_embeds = self.forward_single_view(
+                input_ids=input_ids,
+                media_type=media_type,
+                inputs_embeds=inputs_embeds,
+                orig_embeds_params=orig_embeds_params,
+                video_spatio_temporal_features=video_spatio_temporal_features,
+                img_spatio_temporal_features=img_spatio_temporal_features,
+            )
 
         return super(VideoChatGPTLlamaModel, self).forward(
             input_ids=None, attention_mask=attention_mask, past_key_values=past_key_values,
@@ -179,7 +347,13 @@ class VideoChatGPTLlamaForCausalLM(LlamaForCausalLM):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             video_spatio_temporal_features: Optional[torch.FloatTensor] = None,
+            video_spatio_temporal_features1: Optional[torch.FloatTensor] = None,
+            video_spatio_temporal_features2: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features1: Optional[torch.FloatTensor] = None,
+            img_spatio_temporal_features2: Optional[torch.FloatTensor] = None,
             return_dict: Optional[bool] = None,
+            two_views: Optional[bool] = False
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -197,7 +371,13 @@ class VideoChatGPTLlamaForCausalLM(LlamaForCausalLM):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            video_spatio_temporal_features=video_spatio_temporal_features
+            video_spatio_temporal_features=video_spatio_temporal_features,
+            video_spatio_temporal_features1=video_spatio_temporal_features1,
+            video_spatio_temporal_features2=video_spatio_temporal_features2,
+            img_spatio_temporal_features=img_spatio_temporal_features,
+            img_spatio_temporal_features1=img_spatio_temporal_features1,
+            img_spatio_temporal_features2=img_spatio_temporal_features2,
+            multi_view=two_views
         )
 
         hidden_states = outputs[0]
@@ -250,18 +430,29 @@ class VideoChatGPTLlamaForCausalLM(LlamaForCausalLM):
         )
         return model_inputs
 
-    def initialize_vision_tokenizer(self, mm_use_vid_start_end, tokenizer, device,
+    def initialize_vision_tokenizer(self, mm_use_vid_start_end, tokenizer, device, media_type,
                                     tune_mm_mlp_adapter=False, pretrain_mm_mlp_adapter=None):
         vision_config = self.get_model().vision_config
         vision_config.use_vid_start_end = mm_use_vid_start_end
-        tokenizer.add_tokens([DEFAULT_VIDEO_PATCH_TOKEN], special_tokens=True)
+
+        if media_type == "video":
+            default_patch_token = DEFAULT_VIDEO_PATCH_TOKEN
+            default_start_token = DEFAULT_VID_START_TOKEN
+            default_end_token = DEFAULT_VID_END_TOKEN
+        else:
+            default_patch_token = DEFAULT_IMG_PATCH_TOKEN
+            default_start_token = DEFAULT_IMG_START_TOKEN
+            default_end_token = DEFAULT_IMG_END_TOKEN
+
+        
+        tokenizer.add_tokens([default_patch_token], special_tokens=True)
         self.resize_token_embeddings(len(tokenizer))
 
         if mm_use_vid_start_end:
-            num_new_tokens = tokenizer.add_tokens([DEFAULT_VID_START_TOKEN, DEFAULT_VID_END_TOKEN], special_tokens=True)
+            num_new_tokens = tokenizer.add_tokens([default_start_token, default_end_token], special_tokens=True)
             self.resize_token_embeddings(len(tokenizer))
             vision_config.vid_start_token, vision_config.vid_end_token = tokenizer.convert_tokens_to_ids(
-                [DEFAULT_VID_START_TOKEN, DEFAULT_VID_END_TOKEN])
+                [default_start_token, default_end_token])
 
             if num_new_tokens > 0:
                 input_embeddings = self.get_input_embeddings().weight.data
@@ -296,7 +487,7 @@ class VideoChatGPTLlamaForCausalLM(LlamaForCausalLM):
                         f"Unexpected embed_tokens_weight shape. Pretrained: {embed_tokens_weight.shape}. "
                         f"Current: {input_embeddings.shape}. Numer of new tokens: {num_new_tokens}.")
 
-        vision_config.vid_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_VIDEO_PATCH_TOKEN])[0]
+        vision_config.vid_patch_token = tokenizer.convert_tokens_to_ids([default_patch_token])[0]
 
 
 AutoConfig.register("VideoChatGPT", VideoChatGPTConfig)

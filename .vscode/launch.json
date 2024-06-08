@@ -1,0 +1,224 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Demo",
+            "type": "debugpy",
+            "request": "launch",
+            // "preLaunchTask": "Set PYTHONPATH",
+            "env": {
+                "PYTHONPATH": "./:${env:PYTHONPATH}"
+            },
+            "program": "video_chatgpt/demo/video_demo.py",
+            "console": "integratedTerminal",
+            // "args":["--model-name", "/home/ron/video_captioning/Video-ChatGPT/LLaVA-7B-Lightening-v1-1", 
+            "args":["--model-name", "/home/ron/video_captioning/Video-ChatGPT/llava-v1.5-7b", ],
+                // "--projection_path", "/home/ron/video_captioning/Video-ChatGPT/video_chatgpt-7B.bin"],
+            "justMyCode": false
+        },
+        {
+            "name": "Aerial Demo",
+            "type": "debugpy",
+            "request": "launch",
+            // "preLaunchTask": "Set PYTHONPATH",
+            "env": {
+                "PYTHONPATH": "./:${env:PYTHONPATH}"
+            },
+            "program": "video_chatgpt/demo/video_demo.py",
+            "console": "integratedTerminal",
+            "args":["--model-name", "/home/ron/video_captioning/Video-ChatGPT/LLaVA-7B-Lightening-v1-1", 
+                "--projection_path", "/home/ron/video_captioning/Video-ChatGPT/Video-ChatGPT_7B-1.1_Aerial/mm_projector.bin"],
+            "justMyCode": false
+        },
+        {
+            "name": "2k Imgs Spatio-temporal",
+            "type": "debugpy",
+            "request": "launch",
+           
+            "program": "scripts/save_spatio_temporal_clip_features.py",
+            "console": "integratedTerminal",
+            "args":["--video_dir_path", "/home/ron/mavrec_video_splits/visdrone_carfusion/2k_train_imgs", 
+                "--clip_feat_path", "/home/ron/mavrec_video_splits/2k_img_pkls",],
+                // "--media_type", "video"],
+            "justMyCode": false
+        },
+        {
+            "name": "MAVREC Spatio-temporal",
+            "type": "debugpy",
+            "request": "launch",
+           
+            "program": "scripts/save_spatio_temporal_clip_features.py",
+            "console": "integratedTerminal",
+            "args":["--video_dir_path", "/home/ron/mavrec_video_splits/mavrec_videos", 
+                "--clip_feat_path", "/home/ron/mavrec_video_splits/mavrec_videos_pkls",
+                "--media_type", "video"],
+            "justMyCode": false
+        },
+        {
+            "name": "Json",
+            "type": "debugpy",
+            "request": "launch",
+           
+            "program": "scripts/convert_instruction_json_files_to_training_format.py",
+            "console": "integratedTerminal",
+            "args":["--input_json_file", "/home/ron/mavrec_video_splits/single_view_qa_pairs", 
+                "--output_json_folder", "/home/ron/mavrec_video_splits/aerial_training.json"],
+            "justMyCode": false
+        },
+        {
+            "name": "MAVREC Json",
+            "type": "debugpy",
+            "request": "launch",
+           
+            "program": "scripts/convert_instruction_json_files_to_training_format.py",
+            "console": "integratedTerminal",
+            "args":["--input_json_file", "/home/ron/mavrec_video_splits/mavrec_single_view_qa_pairs/", 
+                "--output_json_folder", "/home/ron/mavrec_video_splits/mavrec_single_qa.json"],
+            "justMyCode": false
+        },
+        {
+            "name": "Matching Json",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "scripts/convert_instruction_json_to_training_format_matching.py",
+            "console": "integratedTerminal",
+            "args":["--input_json_file", "/home/ron/mavrec_video_splits/matching_detections/single_qa224.json", 
+            "--output_json_folder", "/home/ron/mavrec_video_splits/single2k_matching.json"],
+            // "args":["--input_json_file", "/home/ron/mavrec_video_splits/matching_detections/matching_detections224.json", 
+            //     "--output_json_folder", "/home/ron/mavrec_video_splits/combined_matching_detections224.json"],
+            "justMyCode": false
+        },
+        {
+            "name": "2Matching Json",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "scripts/convert_matching_alt.py",
+            "console": "integratedTerminal",
+            "args":["--input_json_file", "/home/ron/mavrec_video_splits/matching_detections/matching_detections224.json", 
+                "--output_json_folder", "/home/ron/mavrec_video_splits/combined_matching_detections224.json"],
+            "justMyCode": false
+        },
+        {
+            "name": "Double Video Experiment",
+            "type": "debugpy",
+            "request": "launch",
+            "env": {
+                "PYTHONPATH": "./:${env:PYTHONPATH}"
+            },
+            "program": "video_chatgpt/double_video_inference.py",
+            "console": "integratedTerminal",
+            "args":["--model-name", "/home/ron/video_captioning/Video-ChatGPT/LLaVA-7B-Lightening-v1-1", 
+            "--projection_path", "/home/ron/video_captioning/Video-ChatGPT/video_chatgpt-7B.bin"],
+            "justMyCode": false
+        },
+        {
+            "name": "Single Video Experiment",
+            "type": "debugpy",
+            "request": "launch",
+            "env": {
+                "PYTHONPATH": "./:${env:PYTHONPATH}"
+            },
+            "program": "video_chatgpt/single_video_inference.py",
+            "console": "integratedTerminal",
+            "args":["--model-name", "/home/ron/video_captioning/Video-ChatGPT/LLaVA-7B-Lightening-v1-1", 
+            "--projection_path", "/home/ron/video_captioning/Video-ChatGPT/video_chatgpt-7B.bin",
+            "--video_path", "/home/ron/mavrec_video_splits/charadesEgo/OCCES.mp4"],
+            "justMyCode": false
+        },
+
+        {
+            "name": "Train Experiment IMG",
+            "type": "debugpy",
+            "request": "launch",
+            "env": {
+                "PYTHONPATH": "./:${env:PYTHONPATH}"
+            },
+            "program": "video_chatgpt/train/train.py",
+            "console": "integratedTerminal",
+            // "args":["--model_name_or_path", "/home/ron/video_captioning/Video-ChatGPT/LLaVA-7B-Lightening-v1-1",
+            "args":["--model_name_or_path", "/home/ron/video_captioning/Video-ChatGPT/llava-v1.5-7b-5GB",
+                    "--version", "v1",
+                    "--data_path", "/home/ron/mavrec_video_splits/img2k_qa.json",
+                    // "--data_path", "/home/ron/mavrec_video_splits/single2k_matching.json",
+
+                    // "--video_folder", "/home/ron/mavrec_video_splits/save_pkls",
+                    "--image_folder", "/home/ron/mavrec_video_splits/2k_img_pkls",
+                    "--tune_mm_mlp_adapter", "True",
+                    // "--mm_use_vid_start_end", 
+                    "--bf16", "True",
+                    "--output_dir", "./Video-ChatGPT_7B-1.1_Checkpoints ",
+                    "--num_train_epochs", "3", 
+                    // "--per_device_train_batch_size", "8", 
+                    // "--per_device_eval_batch_size", "2",
+                    // "--gradient_accumulation_steps", "2",
+                    "--per_device_train_batch_size", "8", 
+                    "--per_device_eval_batch_size", "2",
+                    "--gradient_accumulation_steps", "2",
+                    "--evaluation_strategy", "no",
+                    "--save_strategy", "steps",
+                    "--save_steps", "3000",
+                    "--save_total_limit", "3",
+                    "--learning_rate", "2e-5",
+                    "--weight_decay", "0.", 
+                    "--warmup_ratio", "0.03",
+                    "--lr_scheduler_type", "cosine",
+                    "--logging_steps", "100",
+                    "--tf32", "True",
+                    "--model_max_length", "2048",
+                    "--gradient_checkpointing", "True", 
+                    "--lazy_preprocess", "True",
+                    "--media_type", "img",
+                    "--multi_view", "False"],
+            "justMyCode": false
+        },
+        {
+            "name": "Train Experiment VID",
+            "type": "debugpy",
+            "request": "launch",
+            "env": {
+                "PYTHONPATH": "./:${env:PYTHONPATH}"
+            },
+            "program": "/home/ron/video_captioning/Video-ChatGPT/video_chatgpt/train/train.py",
+            "console": "integratedTerminal",
+            // "args":["--model_name_or_path", "/home/ron/video_captioning/Video-ChatGPT/LLaVA-7B-Lightening-v1-1",
+            "args":["--model_name_or_path", "/home/ron/video_captioning/Video-ChatGPT/llava-v1.5-7b-5GB",
+                    "--version", "v1",
+                    "--data_path", "/home/ron/mavrec_video_splits/mavrec_single_qa.json",
+                    // "--data_path", "/home/ron/mavrec_video_splits/single2k_matching.json",
+
+                    "--video_folder", "/home/ron/mavrec_video_splits/mavrec_pkls",
+                    // "--image_folder", "/home/ron/mavrec_video_splits/save_pkls",
+                    "--tune_mm_mlp_adapter", "True",
+                    // "--mm_use_vid_start_end", 
+                    "--bf16", "True",
+                    "--output_dir", "./Video-ChatGPT_7B-1.1_Checkpoints ",
+                    "--num_train_epochs", "3", 
+                    // "--per_device_train_batch_size", "8", 
+                    // "--per_device_eval_batch_size", "2",
+                    // "--gradient_accumulation_steps", "2",
+                    "--per_device_train_batch_size", "8", 
+                    "--per_device_eval_batch_size", "2",
+                    "--gradient_accumulation_steps", "2",
+                    "--evaluation_strategy", "no",
+                    "--save_strategy", "steps",
+                    "--save_steps", "3000",
+                    "--save_total_limit", "3",
+                    "--learning_rate", "2e-5",
+                    "--weight_decay", "0.", 
+                    "--warmup_ratio", "0.03",
+                    "--lr_scheduler_type", "cosine",
+                    "--logging_steps", "100",
+                    "--tf32", "True",
+                    "--model_max_length", "2048",
+                    "--gradient_checkpointing", "True", 
+                    "--lazy_preprocess", "True",
+                    "--media_type", "video",
+                    "--multi_view", "False"],
+            "justMyCode": false
+        },
+
+    ]
+}
