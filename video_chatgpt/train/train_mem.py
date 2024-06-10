@@ -3,7 +3,7 @@
 
 #replace_llama_attn_with_flash_attn()
 
-# from video_chatgpt.train.train import train
+from video_chatgpt.train.train import train
 
 if __name__ == "__main__":
     train()
