@@ -38,7 +38,7 @@ class DataArguments:
     data_path: str = field(default=None,
                            metadata={"help": "Path to the training data."})
     lazy_preprocess: bool = False
-    is_multimodal: bool = True
+    is_multimodal: bool = False
     sep_video_conv_front: bool = False
     video_token_len: int = 0
     video_folder: Optional[str] = field(default=None)
@@ -49,13 +49,13 @@ class DataArguments:
     frame_aspect_ratio: str = 'square'
     # Accepts two imgs or vids at once
     multi_view: bool = False
-    media_type: str = "img"
+    media_type: str = field(default="img")
 
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
-    two_views: Optional[bool] = False
+    multiple_views: Optional[bool] = False
     optim: str = field(default="adamw_torch")
     remove_unused_columns: bool = field(default=False)
     freeze_mm_mlp_adapter: bool = field(default=False)
@@ -160,7 +160,24 @@ def _add_speaker_and_signal(header, source, get_conversation=True):
     conversation += BEGIN_SIGNAL
     return conversation
 
+def get_tokens(media_type, multi_view):
+    if not multi_view:
+        default_media_token = DEFAULT_VIDEO_TOKEN if media_type == "video" else DEFAULT_IMAGE_TOKEN
+        default_media_patch_token = DEFAULT_VIDEO_PATCH_TOKEN if media_type == "video" else DEFAULT_IMAGE_PATCH_TOKEN
+        default_media_start_token = DEFAULT_VID_START_TOKEN if media_type == "video" else DEFAULT_IMG_START_TOKEN
+        default_media_end_token = DEFAULT_VID_END_TOKEN if media_type == "video" else DEFAULT_IMG_END_TOKEN
+        return default_media_token, default_media_patch_token, default_media_start_token, default_media_end_token
+    else:
+        default_media_token_1 = DEFAULT_VIDEO_TOKEN_1 if media_type == "video" else DEFAULT_IMAGE_TOKEN_1
+        default_media_token_2 = DEFAULT_VIDEO_TOKEN_2 if media_type == "video" else DEFAULT_IMAGE_TOKEN_2
+        default_media_patch_token_1 = DEFAULT_VIDEO_PATCH_TOKEN_1 if media_type == "video" else DEFAULT_IMAGE_PATCH_TOKEN_1
+        default_media_patch_token_2 = DEFAULT_VIDEO_PATCH_TOKEN_2 if media_type == "video" else DEFAULT_IMAGE_PATCH_TOKEN_2
+        default_media_start_token = DEFAULT_VID_START_TOKEN if media_type == "video" else DEFAULT_IMG_START_TOKEN
+        default_media_end_token = DEFAULT_VID_END_TOKEN if media_type == "video" else DEFAULT_IMG_END_TOKEN
+        return default_media_token_1, default_media_token_2, default_media_patch_token_1, default_media_patch_token_2, default_media_start_token, default_media_end_token
 
+
+    
 def preprocess_multimodal(
         sources: Sequence[str],
         multimodal_cfg: dict,
@@ -173,28 +190,46 @@ def preprocess_multimodal(
     if not is_multimodal:
         return sources
     
-    default_media_token = DEFAULT_VIDEO_TOKEN if media_type == "video" else DEFAULT_IMAGE_TOKEN
-    default_media_patch_token = DEFAULT_VIDEO_PATCH_TOKEN if media_type == "video" else DEFAULT_IMAGE_PATCH_TOKEN
-    default_media_start_token = DEFAULT_VID_START_TOKEN if media_type == "video" else DEFAULT_IMG_START_TOKEN
-    default_media_end_token = DEFAULT_VID_END_TOKEN if media_type == "video" else DEFAULT_IMG_END_TOKEN
-
-    if media_type == "video":
-        sep_media_conv_front = multimodal_cfg['sep_video_conv_front']
-        use_media_start_end = multimodal_cfg['use_vid_start_end']
+    if not multi_view:
+        default_media_token, default_media_patch_token, default_media_start_token, default_media_end_token = get_tokens(media_type, multi_view)
+        if media_type == "video":
+            sep_media_conv_front = multimodal_cfg['sep_video_conv_front']
+            use_media_start_end = multimodal_cfg['use_vid_start_end']
+        else:
+            sep_media_conv_front = multimodal_cfg['sep_image_conv_front']
+            use_media_start_end = multimodal_cfg['use_img_start_end']
+        for source in sources:
+            if sep_media_conv_front:
+                assert default_media_token in source[0]['value']
+                source[0]['value'] = source[0]['value'].replace(default_media_token, '').strip()
+                source[0]['value'] = default_media_token + conversation_lib.default_conversation.sep + \
+                                    conversation_lib.default_conversation.roles[0] + ": " + source[0]['value']
+            for sentence in source:
+                replace_token = default_media_patch_token * video_token_len
+                if use_media_start_end:
+                    replace_token = default_media_start_token + replace_token + default_media_end_token
+                sentence["value"] = sentence["value"].replace(default_media_token, replace_token)
     else:
-        sep_media_conv_front = multimodal_cfg['sep_image_conv_front']
-        use_media_start_end = multimodal_cfg['use_img_start_end']
-    for source in sources:
-        if sep_media_conv_front:
-            assert default_media_token in source[0]['value']
-            source[0]['value'] = source[0]['value'].replace(default_media_token, '').strip()
-            source[0]['value'] = default_media_token + conversation_lib.default_conversation.sep + \
-                                 conversation_lib.default_conversation.roles[0] + ": " + source[0]['value']
-        for sentence in source:
-            replace_token = default_media_patch_token * video_token_len
-            if use_media_start_end:
-                replace_token = default_media_start_token + replace_token + default_media_end_token
-            sentence["value"] = sentence["value"].replace(default_media_token, replace_token)
+        default_media_token_1, default_media_token_2, default_media_patch_token_1, default_media_patch_token_2, default_media_start_token, default_media_end_token = get_tokens(media_type, multi_view)
+        if media_type == "video":
+            sep_media_conv_front = multimodal_cfg['sep_video_conv_front']
+            use_media_start_end = multimodal_cfg['use_vid_start_end']
+        else:
+            sep_media_conv_front = multimodal_cfg['sep_image_conv_front']
+            use_media_start_end = multimodal_cfg['use_img_start_end']
+        for source in sources:
+            if sep_media_conv_front:
+                assert default_media_token in source[0]['value']
+                source[0]['value'] = source[0]['value'].replace(default_media_token, '').strip()
+                source[0]['value'] = default_media_token + conversation_lib.default_conversation.sep + \
+                                    conversation_lib.default_conversation.roles[0] + ": " + source[0]['value']
+            for sentence in source:
+                replace_token_1 = default_media_patch_token_1 * video_token_len
+                replace_token_2 = default_media_patch_token_2 * video_token_len
+                if use_media_start_end:
+                    replace_token = default_media_start_token + replace_token + default_media_end_token
+                sentence["value"] = sentence["value"].replace(default_media_token_1, replace_token_1).replace(default_media_token_2, replace_token_2)
+
 
     return sources
 
@@ -514,7 +549,7 @@ class LazySupervisedDataset4IMG(Dataset):
                 with open(f"{video_folder}/{video_file}", "rb") as f:
                     features = pickle.load(f)
 
-                cur_token_len = 356  # 100 temporal + 256 spatial, TODO: Hard Coding is not good
+                cur_token_len = 256  # 256 spatial, TODO: Hard Coding is not good
                 sources = preprocess_multimodal(
                     copy.deepcopy([e["conversations"] for e in sources]),
                     self.multimodal_cfg, cur_token_len, 
@@ -566,6 +601,9 @@ class DataCollatorForSupervisedDataset(object):
                 else:
                     batch['video_spatio_temporal_features1'] = features1
                     batch['video_spatio_temporal_features2'] = features2
+
+                batch['media_type'] = "video"
+                batch["multi_view"] = True
             elif 'img1' in instances[0] and 'img2' in instances[0]:
                 features1 = [torch.tensor(instance['img1']) for instance in instances]
                 features2 = [torch.tensor(instance['img2']) for instance in instances]
@@ -575,6 +613,9 @@ class DataCollatorForSupervisedDataset(object):
                 else:
                     batch['img_spatio_temporal_features1'] = features1
                     batch['img_spatio_temporal_features2'] = features2
+                    
+                batch['media_type'] = "img"
+                batch["multi_view"] = True
 
         else:
             if 'video' in instances[0]:
@@ -583,12 +624,18 @@ class DataCollatorForSupervisedDataset(object):
                     batch['video_spatio_temporal_features'] = torch.stack(features)
                 else:
                     batch['video_spatio_temporal_features'] = features
+                
+                batch['media_type'] = "video"
+                batch["multi_view"] = False
             elif 'img' in instances[0]:
                 features = [torch.tensor(instance['img']) for instance in instances]
                 if all(x is not None and x.shape == features[0].shape for x in features):
                     batch['img_spatio_temporal_features'] = torch.stack(features)
                 else:
                     batch['img_spatio_temporal_features'] = features
+                
+                batch['media_type'] = "img"
+                batch["multi_view"] = False
 
         return batch
 
@@ -681,7 +728,7 @@ def train():
     vision_config.use_vid_start_end = training_args.use_vid_start_end = model_args.mm_use_vid_start_end
     model.config.sep_video_conv_front = data_args.sep_video_conv_front
     model.initialize_vision_tokenizer(mm_use_vid_start_end=model_args.mm_use_vid_start_end, tokenizer=tokenizer,
-                                      device=training_args.device, media_type=data_args.media_type, 
+                                      device=training_args.device, media_type=data_args.media_type, multi_view=data_args.multi_view,
                                       tune_mm_mlp_adapter=model_args.tune_mm_mlp_adapter, pretrain_mm_mlp_adapter=model_args.pretrain_mm_mlp_adapter)
 
     params_no_grad = [n for n, p in model.named_parameters() if not p.requires_grad]
@@ -714,6 +761,8 @@ def train():
     training_args.report_to = []
     # training_args.max_steps = 10
 
+    # training_args.multiple_views = data_args.multi_view
+    # training_args.type_of_media = data_args.media_type
     trainer = VideoChatGPTTrainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):

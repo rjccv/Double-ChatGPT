@@ -47,27 +47,22 @@ def main():
 
     # input_json_contents = sorted(json_contents, key=sort_by_name) 
     output_json_contents = []
-    count_list = get_count_list(input_json_contents)
-    i, k = 0, 0
-    # j = count_list[0]
-    for j in count_list:
-        j = j + k
-        for json_content in input_json_contents[k:j]:
-            if json_content.get("Q1", None) is not None:           
-                img_id_1 = Path(json_content['aerial_filename']).stem
-                img_id_2 = Path(json_content['ground_filename']).stem
-                output_content = {'id1': img_id_1, 'img1': f"{img_id_1}.pkl", "id2": img_id_2, 'img2': f"{img_id_2}.pkl", 'conversations': []}
-            for key, val in json_content.items():
-                if key.startswith("Q"):
-                    question = val
-                if key.startswith("A"):
-                    answer = val
-            output_content['conversations'].append({'from': 'human', 'value': (question).replace('<mask1>', '').replace('<mask2>', '')})
-            output_content['conversations'].append({'from': 'gpt', 'value': answer})
+
+    for json_content in input_json_contents:
+        img_id_1 = Path(json_content['aerial_filename']).stem
+        img_id_2 = Path(json_content['ground_filename']).stem
+        output_content = {'id1': img_id_1, 'img1': f"{img_id_1}.pkl", "id2": img_id_2, 'img2': f"{img_id_2}.pkl", 'conversations': []}      
+
+        for key, val in json_content.items():
+            if key.startswith("Q"):
+                question = val
+            if key.startswith("A"):
+                answer = val
+        output_content['conversations'].append({'from': 'human', 'value': (question).replace('\n<img2><mask2>', '').replace('<mask1>', '<img2>')})
+        output_content['conversations'].append({'from': 'gpt', 'value': answer})
 
         output_json_contents.append(output_content)
         
-        k = j
 
 
     # output_json_file = os.path.join(output_json_folder, json_file.split('/')[-1])
